@@ -103,7 +103,34 @@ curl -sS -X POST https://rpc.quicknode.testnet.arc.network/ \
 
 A follower can pass the first check while failing the second. In that state, reads from the local verified chain can work even though `eth_sendRawTransaction` cannot be forwarded.
 
-## 6. Information to include in a bug report
+## 6. Check for idle connection-pool failures
+
+If the reachability, TLS, DNS, proxy, and service-environment checks above all pass, test whether the failure correlates with an idle gap before the forwarded write.
+
+One useful comparison is:
+
+1. Poll a read-only RPC such as `eth_blockNumber` every few seconds, then submit a transaction immediately.
+2. Repeat the same test, but leave the node idle for roughly 30–90 seconds before submitting the transaction.
+
+If the immediate write succeeds while the post-idle write fails, the symptom is more consistent with reuse of a stale pooled connection than with basic upstream reachability. This behavior is being investigated in [#59](https://github.com/circlefin/arc-node/issues/59).
+
+When testing the upstream directly, also compare the default curl behavior with an explicit HTTP/1.1 request:
+
+```sh
+# Default protocol negotiation
+curl -sS -X POST https://rpc.quicknode.testnet.arc.network/ \
+  -H 'content-type: application/json' \
+  --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+
+# Force HTTP/1.1 as a negative control
+curl --http1.1 -sS -X POST https://rpc.quicknode.testnet.arc.network/ \
+  -H 'content-type: application/json' \
+  --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+```
+
+If both variants succeed while the follower still fails only after an idle period, capture the timing and debug logs and include them in the issue report. That evidence helps distinguish protocol-negotiation problems from connection-pool staleness.
+
+## 7. Information to include in a bug report
 
 When the generic forwarding error remains after the checks above, include:
 
@@ -111,6 +138,8 @@ When the generic forwarding error remains after the checks above, include:
 - operating system and architecture;
 - the `--rpc.forwarder` URL with credentials or API keys removed;
 - whether the JSON-RPC `eth_chainId` curl succeeds under the service account;
+- whether the failure changes after a 30–90 second idle gap;
+- whether default curl and `curl --http1.1` behave differently;
 - the relevant `RUST_LOG` lines from `rpc::eth` and `alloy_rpc_client`;
 - whether the node is started interactively, through systemd, or in Docker;
 - proxy and custom CA usage, without including secrets.
@@ -120,3 +149,5 @@ Do not post private keys, bearer tokens, API keys, JWT secrets, or complete envi
 ## Related documentation
 
 See [Running an Arc Node](running-an-arc-node.md) for the standard follower-node configuration and the current testnet forwarder example.
+
+For the live investigation into idle-time forwarding failures and connection-pool behavior, see [issue #59](https://github.com/circlefin/arc-node/issues/59).
